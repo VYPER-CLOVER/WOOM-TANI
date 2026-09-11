@@ -14,6 +14,11 @@
   const MOVE_SPEED = 3.2;           // celdas/seg
   const ROT_SPEED = 2.6;            // rad/seg (teclado)
   const MOUSE_SENS = 0.0022;
+  const GAMEPAD_ROT_SPEED = 3.0;    // rad/seg a stick derecho al fondo
+  const GAMEPAD_DEADZONE = 0.18;
+  const GAMEPAD_TRIGGER_THRESHOLD = 0.4;
+  const TOUCH_ROT_SENS = 0.0055;
+  const TOUCH_JOYSTICK_MAX = 46;    // radio (px, en pantalla) del stick virtual
   const PLAYER_RADIUS = 0.22;
   const ENEMY_RADIUS = 0.25;
   const PICKUP_RADIUS = 0.55;
@@ -271,7 +276,7 @@
   let levelStartTime = 0;
 
   /* ---------------- Estado del juego / pantallas ---------------- */
-  let state = "menu"; // menu | playing | dead | won
+  let state = "controlselect"; // controlselect | menu | playing | dead | won
   const keys = {};
   let muzzleFlashTimer = 0;
   let weaponGrabTimer = 0;
@@ -280,9 +285,24 @@
   let zBuffer = new Array(W).fill(1e9);
   let nearFinish = false;
 
+  /* ---------------- Esquema de control: teclado | gamepad | mobile ---------------- */
+  let controlScheme = "keyboard";
+  const pad = { up: false, down: false, left: false, right: false };
+  let gpPrevButtons = [];
+  const CONTROL_SUBTITLES = {
+    keyboard: "Nivel 1. Movete con W A S D (o flechas), mirá con el mouse (click para capturarlo) o con Izquierda/Derecha, disparás con click o espacio. Cambiá de arma con 1 (pistola) y 2 (escopeta). Presioná E para interactuar con lo que tengas cerca (interruptores, puertas).",
+    gamepad: "Nivel 1. Movete con la cruceta del mando, mirá con el stick derecho, disparás con R2. Cambiá de arma con L1 (pistola) y R1 (escopeta). Presioná ◻ (cuadrado) para interactuar con lo que tengas cerca (interruptores, puertas).",
+    mobile: "Nivel 1. Movete con el joystick de la izquierda, mirá arrastrando el dedo por la derecha de la pantalla. Usá los botones para disparar, interactuar (interruptores, puertas) y cambiar de arma.",
+  };
+
+  /* ---------------- Touch (control por celular) ---------------- */
+  let touchMoveId = null, touchMoveDX = 0, touchMoveDY = 0;
+  let touchLookId = null, touchLookLastX = 0;
+  let elTouchControls, elJoyStick, elJoyBase;
+
   /* ---------------- DOM ---------------- */
   let root, canvas, ctx, elHealth, elArmor, elAmmo, elScoreLive, elFaceImg, elWeaponIcon, elInteractHint;
-  let overlayMenu, overlayEnd, overlayLeaderboard, hitFlash;
+  let overlayControlSelect, overlayMenu, overlayEnd, overlayLeaderboard, hitFlash, elMenuSubtitle;
 
   function buildDOM(container) {
     container.innerHTML = `
@@ -321,12 +341,31 @@
           </div>
         </div>
 
-        <div class="dw-overlay" id="dw-overlay-menu">
+        <div class="dw-overlay" id="dw-overlay-controlselect">
+          <h1 class="dw-title" style="font-size:clamp(30px, 5.6vw, 54px);">¿CÓMO QUERÉS JUGAR?</h1>
+          <div id="dw-control-options">
+            <button class="dw-control-opt" id="dw-opt-keyboard">
+              <span class="dw-control-opt-title">Teclado y mouse</span>
+              <span class="dw-control-opt-desc">WASD / flechas + mouse para apuntar</span>
+            </button>
+            <button class="dw-control-opt" id="dw-opt-gamepad">
+              <span class="dw-control-opt-title">Mando (PS3)</span>
+              <span class="dw-control-opt-desc">Cruceta, stick derecho y gatillos</span>
+            </button>
+            <button class="dw-control-opt" id="dw-opt-mobile">
+              <span class="dw-control-opt-title">Celular</span>
+              <span class="dw-control-opt-desc">Joystick y botones en pantalla</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="dw-overlay dw-hidden" id="dw-overlay-menu">
           <h1 class="dw-title">WOOM-TANI</h1>
-          <p class="dw-subtitle">Nivel 1. Movete con W A S D (o flechas), mirá con el mouse (click para capturarlo) o con Izquierda/Derecha, disparás con click o espacio. Cambiá de arma con 1 (pistola) y 2 (escopeta). Presioná E para interactuar con lo que tengas cerca (interruptores, puertas).</p>
+          <p class="dw-subtitle" id="dw-menu-subtitle">Nivel 1. Movete con W A S D (o flechas), mirá con el mouse (click para capturarlo) o con Izquierda/Derecha, disparás con click o espacio. Cambiá de arma con 1 (pistola) y 2 (escopeta). Presioná E para interactuar con lo que tengas cerca (interruptores, puertas).</p>
           <button class="dw-btn" id="dw-btn-start">Empezar</button>
           <div class="dw-subtitle dw-pointerlock-hint">Consejo: si el juego está incrustado en un iframe, agregá el atributo allow="pointer-lock" para poder mirar con el mouse.</div>
           <button class="dw-btn dw-secondary" id="dw-btn-view-scores">Ver tabla de puntajes</button>
+          <button class="dw-btn dw-secondary" id="dw-btn-change-controls">Cambiar forma de jugar</button>
         </div>
 
         <div class="dw-overlay dw-hidden" id="dw-overlay-end">
@@ -344,6 +383,20 @@
           <table id="dw-leaderboard-table"><thead><tr><th>#</th><th>Nombre</th><th>Puntaje</th></tr></thead><tbody id="dw-lb-body"></tbody></table>
           <button class="dw-btn" id="dw-btn-restart">Jugar de nuevo</button>
         </div>
+
+        <div id="dw-touch-controls" class="dw-hidden">
+          <div id="dw-joy-base">
+            <div id="dw-joy-stick"></div>
+          </div>
+          <div id="dw-touch-buttons">
+            <button id="dw-touch-interact" class="dw-touch-btn dw-touch-btn-round">E</button>
+            <button id="dw-touch-shoot" class="dw-touch-btn dw-touch-btn-fire">FUEGO</button>
+            <div id="dw-touch-weapons">
+              <button id="dw-touch-w1" class="dw-touch-btn dw-touch-btn-small">1</button>
+              <button id="dw-touch-w2" class="dw-touch-btn dw-touch-btn-small">2</button>
+            </div>
+          </div>
+        </div>
       </div>
     `;
     root = container.querySelector("#dw-root");
@@ -357,10 +410,24 @@
     elWeaponIcon = container.querySelector("#dw-weapon-icon");
     elFaceImg = container.querySelector("#dw-face-img");
     elInteractHint = container.querySelector("#dw-interact-hint");
+    overlayControlSelect = container.querySelector("#dw-overlay-controlselect");
     overlayMenu = container.querySelector("#dw-overlay-menu");
     overlayEnd = container.querySelector("#dw-overlay-end");
     overlayLeaderboard = container.querySelector("#dw-overlay-leaderboard");
+    elMenuSubtitle = container.querySelector("#dw-menu-subtitle");
+    elTouchControls = container.querySelector("#dw-touch-controls");
+    elJoyStick = container.querySelector("#dw-joy-stick");
+    elJoyBase = container.querySelector("#dw-joy-base");
 
+    container.querySelector("#dw-opt-keyboard").addEventListener("click", () => chooseControlScheme("keyboard"));
+    container.querySelector("#dw-opt-gamepad").addEventListener("click", () => chooseControlScheme("gamepad"));
+    container.querySelector("#dw-opt-mobile").addEventListener("click", () => chooseControlScheme("mobile"));
+    container.querySelector("#dw-btn-change-controls").addEventListener("click", () => {
+      overlayMenu.classList.add("dw-hidden");
+      overlayControlSelect.classList.remove("dw-hidden");
+      elTouchControls.classList.add("dw-hidden");
+      state = "controlselect";
+    });
     container.querySelector("#dw-btn-start").addEventListener("click", startLevel);
     container.querySelector("#dw-btn-view-scores").addEventListener("click", () => showLeaderboard(null));
     container.querySelector("#dw-btn-restart").addEventListener("click", () => {
@@ -384,20 +451,32 @@
     });
     document.addEventListener("keyup", (e) => { keys[e.code] = false; });
     document.addEventListener("mousemove", (e) => {
-      if (state === "playing" && document.pointerLockElement === canvas) {
+      if (state === "playing" && controlScheme === "keyboard" && document.pointerLockElement === canvas) {
         player.angle += e.movementX * MOUSE_SENS;
         updateDirVectors();
       }
     });
+
+    setupTouchControls(container);
+  }
+
+  function chooseControlScheme(scheme) {
+    controlScheme = scheme;
+    elMenuSubtitle.textContent = CONTROL_SUBTITLES[scheme] || CONTROL_SUBTITLES.keyboard;
+    const hint = overlayMenu.querySelector(".dw-pointerlock-hint");
+    if (hint) hint.classList.toggle("dw-hidden", scheme !== "keyboard");
+    overlayControlSelect.classList.add("dw-hidden");
+    overlayMenu.classList.remove("dw-hidden");
+    state = "menu";
   }
 
   function onCanvasClick() {
     if (state === "menu") { startLevel(); return; }
     if (state === "playing") {
-      if (canvas.requestPointerLock && document.pointerLockElement !== canvas) {
+      if (controlScheme === "keyboard" && canvas.requestPointerLock && document.pointerLockElement !== canvas) {
         canvas.requestPointerLock();
       }
-      tryShoot();
+      if (controlScheme === "keyboard") tryShoot();
     }
   }
 
@@ -425,6 +504,141 @@
         return;
       }
     }
+  }
+
+  /* ---------------- Gamepad (mando estilo PS3) ---------------- */
+  function getActiveGamepad() {
+    if (!navigator.getGamepads) return null;
+    const pads = navigator.getGamepads();
+    for (const gp of pads) if (gp) return gp;
+    return null;
+  }
+
+  function pollGamepad(dt) {
+    pad.up = pad.down = pad.left = pad.right = false;
+    if (controlScheme !== "gamepad" || state !== "playing") return;
+    const gp = getActiveGamepad();
+    if (!gp) return;
+    const btn = (i) => (gp.buttons[i] ? gp.buttons[i].pressed || gp.buttons[i].value > GAMEPAD_TRIGGER_THRESHOLD : false);
+    const wasPressed = (i) => !!gpPrevButtons[i];
+
+    // Cruceta (D-pad): mapeo estándar del W3C Gamepad API (botones 12-15)
+    pad.up = btn(12);
+    pad.down = btn(13);
+    pad.left = btn(14);
+    pad.right = btn(15);
+
+    // Stick derecho: mirar/girar la cámara
+    const lookX = gp.axes[2] || 0;
+    if (Math.abs(lookX) > GAMEPAD_DEADZONE) {
+      player.angle += lookX * GAMEPAD_ROT_SPEED * dt;
+      updateDirVectors();
+    }
+
+    // R2 (gatillo derecho, botón 7): disparar. Cuadrado (botón 2): interactuar.
+    // L1 (botón 4) / R1 (botón 5): cambiar de arma.
+    if (btn(7) && !wasPressed(7)) tryShoot();
+    if (btn(2) && !wasPressed(2)) tryInteract();
+    if (btn(4) && !wasPressed(4)) player.weapon = "pistol";
+    if (btn(5) && !wasPressed(5) && player.hasShotgun) player.weapon = "shotgun";
+
+    gpPrevButtons = gp.buttons.map((b) => b.pressed || b.value > GAMEPAD_TRIGGER_THRESHOLD);
+  }
+
+  /* ---------------- Controles táctiles (celular) ---------------- */
+  function resetTouchState() {
+    touchMoveId = null; touchMoveDX = 0; touchMoveDY = 0;
+    touchLookId = null;
+    if (elJoyStick) elJoyStick.style.transform = "translate(0px, 0px)";
+  }
+
+  function setupTouchControls(container) {
+    const joyBase = elJoyBase, joyStick = elJoyStick;
+
+    function joyStart(e) {
+      if (touchMoveId !== null) return;
+      const t = e.changedTouches[0];
+      touchMoveId = t.identifier;
+      updateJoy(t);
+      e.preventDefault();
+    }
+    function updateJoy(t) {
+      const rect = joyBase.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+      let dx = t.clientX - cx, dy = t.clientY - cy;
+      const len = Math.hypot(dx, dy);
+      if (len > TOUCH_JOYSTICK_MAX) { dx = (dx / len) * TOUCH_JOYSTICK_MAX; dy = (dy / len) * TOUCH_JOYSTICK_MAX; }
+      joyStick.style.transform = `translate(${dx}px, ${dy}px)`;
+      touchMoveDX = dx / TOUCH_JOYSTICK_MAX;
+      touchMoveDY = dy / TOUCH_JOYSTICK_MAX;
+    }
+    function joyMove(e) {
+      for (const t of e.changedTouches) {
+        if (t.identifier === touchMoveId) { updateJoy(t); e.preventDefault(); }
+      }
+    }
+    function joyEnd(e) {
+      for (const t of e.changedTouches) {
+        if (t.identifier === touchMoveId) {
+          touchMoveId = null; touchMoveDX = 0; touchMoveDY = 0;
+          joyStick.style.transform = "translate(0px, 0px)";
+        }
+      }
+    }
+    joyBase.addEventListener("touchstart", joyStart, { passive: false });
+    joyBase.addEventListener("touchmove", joyMove, { passive: false });
+    joyBase.addEventListener("touchend", joyEnd, { passive: false });
+    joyBase.addEventListener("touchcancel", joyEnd, { passive: false });
+
+    // Arrastrar el dedo por el resto de la pantalla (fuera del joystick y los botones) gira la cámara
+    canvas.addEventListener("touchstart", (e) => {
+      if (state !== "playing" || controlScheme !== "mobile") return;
+      const t = e.changedTouches[0];
+      if (touchLookId !== null) return;
+      touchLookId = t.identifier;
+      touchLookLastX = t.clientX;
+    }, { passive: false });
+    canvas.addEventListener("touchmove", (e) => {
+      if (controlScheme !== "mobile") return;
+      for (const t of e.changedTouches) {
+        if (t.identifier === touchLookId) {
+          const dx = t.clientX - touchLookLastX;
+          touchLookLastX = t.clientX;
+          player.angle += dx * TOUCH_ROT_SENS;
+          updateDirVectors();
+          e.preventDefault();
+        }
+      }
+    }, { passive: false });
+    canvas.addEventListener("touchend", (e) => {
+      for (const t of e.changedTouches) if (t.identifier === touchLookId) touchLookId = null;
+    }, { passive: false });
+    canvas.addEventListener("touchcancel", (e) => {
+      for (const t of e.changedTouches) if (t.identifier === touchLookId) touchLookId = null;
+    }, { passive: false });
+
+    // Botones táctiles
+    const btnInteract = container.querySelector("#dw-touch-interact");
+    const btnShoot = container.querySelector("#dw-touch-shoot");
+    const btnW1 = container.querySelector("#dw-touch-w1");
+    const btnW2 = container.querySelector("#dw-touch-w2");
+    const tap = (el, fn) => el.addEventListener("touchstart", (e) => { e.preventDefault(); fn(); }, { passive: false });
+    tap(btnInteract, () => { if (state === "playing") tryInteract(); });
+    tap(btnShoot, () => { if (state === "playing") tryShoot(); });
+    tap(btnW1, () => { if (state === "playing") player.weapon = "pistol"; });
+    tap(btnW2, () => { if (state === "playing" && player.hasShotgun) player.weapon = "shotgun"; });
+  }
+
+  function applyTouchMovement() {
+    if (controlScheme !== "mobile" || touchMoveId === null) return { mx: 0, my: 0 };
+    // touchMoveDY negativo = joystick hacia arriba = adelante
+    const fwd = -touchMoveDY, strafe = touchMoveDX;
+    if (Math.abs(fwd) < 0.08 && Math.abs(strafe) < 0.08) return { mx: 0, my: 0 };
+    const rightX = -player.dirY, rightY = player.dirX;
+    return {
+      mx: player.dirX * fwd + rightX * strafe,
+      my: player.dirY * fwd + rightY * strafe,
+    };
   }
 
   function updateDoors(dt) {
@@ -462,6 +676,9 @@
     state = "playing";
     stopDesesperado();
     ensureMusicPlaying();
+    elTouchControls.classList.toggle("dw-hidden", controlScheme !== "mobile");
+    resetTouchState();
+    gpPrevButtons = [];
   }
 
   function damagePlayer(amount) {
@@ -559,19 +776,20 @@
       desesperadoAudio.currentTime = 0;
     }
   }
+
   let cobraAudio = null;
-function switchToCobra() {
-  try {
-    if (musicAudio && !musicAudio.paused) musicAudio.pause();
-    if (desesperadoAudio && !desesperadoAudio.paused) desesperadoAudio.pause();
-    if (!cobraAudio) {
-      cobraAudio = new Audio(SOUND_PATHS.cobra);
-      cobraAudio.loop = true;
-      cobraAudio.volume = 0.3;
-    }
-    if (cobraAudio.paused) cobraAudio.play().catch(() => {});
-  } catch (e) { /* audio no disponible, seguimos sin romper el juego */ }
-}
+  function switchToCobra() {
+    try {
+      if (musicAudio && !musicAudio.paused) musicAudio.pause();
+      if (desesperadoAudio && !desesperadoAudio.paused) desesperadoAudio.pause();
+      if (!cobraAudio) {
+        cobraAudio = new Audio(SOUND_PATHS.cobra);
+        cobraAudio.loop = true;
+        cobraAudio.volume = 0.3;
+      }
+      if (cobraAudio.paused) cobraAudio.play().catch(() => {});
+    } catch (e) { /* audio no disponible, seguimos sin romper el juego */ }
+  }
 
   function tryShoot() {
     if (state !== "playing" || player.ammo <= 0) return;
@@ -603,15 +821,19 @@ function switchToCobra() {
     if (weaponGrabTimer > 0) weaponGrabTimer = Math.max(0, weaponGrabTimer - dt);
     if (faceOverrideTimer > 0) faceOverrideTimer = Math.max(0, faceOverrideTimer - dt);
 
+    pollGamepad(dt);
+
     if (keys["ArrowLeft"]) { player.angle -= ROT_SPEED * dt; updateDirVectors(); }
     if (keys["ArrowRight"]) { player.angle += ROT_SPEED * dt; updateDirVectors(); }
 
     let mx = 0, my = 0;
-    if (keys["KeyW"] || keys["ArrowUp"]) { mx += player.dirX; my += player.dirY; }
-    if (keys["KeyS"] || keys["ArrowDown"]) { mx -= player.dirX; my -= player.dirY; }
+    if (keys["KeyW"] || keys["ArrowUp"] || pad.up) { mx += player.dirX; my += player.dirY; }
+    if (keys["KeyS"] || keys["ArrowDown"] || pad.down) { mx -= player.dirX; my -= player.dirY; }
     const rightX = -player.dirY, rightY = player.dirX;
-    if (keys["KeyD"]) { mx += rightX; my += rightY; }
-    if (keys["KeyA"]) { mx -= rightX; my -= rightY; }
+    if (keys["KeyD"] || pad.right) { mx += rightX; my += rightY; }
+    if (keys["KeyA"] || pad.left) { mx -= rightX; my -= rightY; }
+    const touchM = applyTouchMovement();
+    mx += touchM.mx; my += touchM.my;
     const mlen = Math.hypot(mx, my);
     isMoving = mlen > 0.01;
     if (isMoving) {
@@ -721,6 +943,8 @@ function switchToCobra() {
 
     overlayEnd.classList.remove("dw-hidden");
     document.getElementById("dw-name-input").value = "";
+    elTouchControls.classList.add("dw-hidden");
+    resetTouchState();
   }
 
   let container_lastFinalScore = 0;
@@ -961,17 +1185,17 @@ function switchToCobra() {
   }
 
   const HUD_HEIGHT_RATIO = 0.15; // debe coincidir con la altura del #dw-hud en el CSS
-function renderWeapon() {
-  const bobX = isMoving ? Math.sin(walkCycle) * 10 : 0;
-  const bobY = isMoving ? Math.abs(Math.sin(walkCycle)) * 12 : 0;
-  const recoil = muzzleFlashTimer > 0 ? 16 : 0;
-  const img = assets[currentWeaponAssetKey()];
-  const w = W * 0.4, h = w * 0.64;
-  const x = W / 2 - w / 2 + bobX;
-  const hudTop = H * (1 - HUD_HEIGHT_RATIO);
-  const y = hudTop - h * 0.6 + bobY - recoil;
-  drawImageSafe(img, x, y, w, h, "#3a3a3a");
-}
+  function renderWeapon() {
+    const bobX = isMoving ? Math.sin(walkCycle) * 10 : 0;
+    const bobY = isMoving ? Math.abs(Math.sin(walkCycle)) * 12 : 0;
+    const recoil = muzzleFlashTimer > 0 ? 16 : 0;
+    const img = assets[currentWeaponAssetKey()];
+    const w = W * 0.4, h = w * 0.64;
+    const x = W / 2 - w / 2 + bobX;
+    const hudTop = H * (1 - HUD_HEIGHT_RATIO);
+    const y = hudTop - h * 0.6 + bobY - recoil;
+    drawImageSafe(img, x, y, w, h, "#3a3a3a");
+  }
 
   /* ---------------- HUD ---------------- */
   function updateHUD() {
