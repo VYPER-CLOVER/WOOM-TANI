@@ -287,11 +287,11 @@
 
   /* ---------------- Esquema de control: teclado | gamepad | mobile ---------------- */
   let controlScheme = "keyboard";
-  const pad = { up: false, down: false, left: false, right: false };
+  const gpMove = { mx: 0, my: 0 };
   let gpPrevButtons = [];
   const CONTROL_SUBTITLES = {
     keyboard: "Nivel 1. Movete con W A S D (o flechas), mirá con el mouse (click para capturarlo) o con Izquierda/Derecha, disparás con click o espacio. Cambiá de arma con 1 (pistola) y 2 (escopeta). Presioná E para interactuar con lo que tengas cerca (interruptores, puertas).",
-    gamepad: "Nivel 1. Movete con la cruceta del mando, mirá con el stick derecho, disparás con R2. Cambiá de arma con L1 (pistola) y R1 (escopeta). Presioná ◻ (cuadrado) para interactuar con lo que tengas cerca (interruptores, puertas).",
+    gamepad: "Nivel 1. Movete con el stick izquierdo del mando, mirá con el stick derecho, disparás con R2. Cambiá de arma con L1 (pistola) y R1 (escopeta). Presioná ◻ (cuadrado) para interactuar con lo que tengas cerca (interruptores, puertas).",
     mobile: "Nivel 1. Movete con el joystick de la izquierda, mirá arrastrando el dedo por la derecha de la pantalla. Usá los botones para disparar, interactuar (interruptores, puertas) y cambiar de arma.",
   };
 
@@ -350,7 +350,7 @@
             </button>
             <button class="dw-control-opt" id="dw-opt-gamepad">
               <span class="dw-control-opt-title">Mando (PS3)</span>
-              <span class="dw-control-opt-desc">Cruceta, stick derecho y gatillos</span>
+              <span class="dw-control-opt-desc">Stick izquierdo, stick derecho y gatillos</span>
             </button>
             <button class="dw-control-opt" id="dw-opt-mobile">
               <span class="dw-control-opt-title">Celular</span>
@@ -468,6 +468,27 @@
     overlayControlSelect.classList.add("dw-hidden");
     overlayMenu.classList.remove("dw-hidden");
     state = "menu";
+    if (scheme === "mobile") tryForceLandscape();
+  }
+
+  // Intento best-effort de pasar a pantalla completa y bloquear la orientación
+  // horizontal. No todos los navegadores lo permiten (sobre todo iOS Safari),
+  // así que si falla queda el aviso de "girá tu celular" como respaldo (CSS).
+  function tryForceLandscape() {
+    try {
+      const el = root || document.documentElement;
+      const requestFS = el.requestFullscreen || el.webkitRequestFullscreen || el.mozRequestFullScreen || el.msRequestFullscreen;
+      const doLock = () => {
+        if (screen.orientation && screen.orientation.lock) {
+          screen.orientation.lock("landscape").catch(() => {});
+        }
+      };
+      if (requestFS) {
+        Promise.resolve(requestFS.call(el)).then(doLock).catch(doLock);
+      } else {
+        doLock();
+      }
+    } catch (e) { /* sin soporte: queda el aviso visual de girar el celular */ }
   }
 
   function onCanvasClick() {
@@ -515,18 +536,23 @@
   }
 
   function pollGamepad(dt) {
-    pad.up = pad.down = pad.left = pad.right = false;
+    gpMove.mx = 0; gpMove.my = 0;
     if (controlScheme !== "gamepad" || state !== "playing") return;
     const gp = getActiveGamepad();
     if (!gp) return;
     const btn = (i) => (gp.buttons[i] ? gp.buttons[i].pressed || gp.buttons[i].value > GAMEPAD_TRIGGER_THRESHOLD : false);
     const wasPressed = (i) => !!gpPrevButtons[i];
 
-    // Cruceta (D-pad): mapeo estándar del W3C Gamepad API (botones 12-15)
-    pad.up = btn(12);
-    pad.down = btn(13);
-    pad.left = btn(14);
-    pad.right = btn(15);
+    // Stick izquierdo: mover (adelante/atrás/costados), analógico
+    let lx = gp.axes[0] || 0, ly = gp.axes[1] || 0;
+    if (Math.abs(lx) < GAMEPAD_DEADZONE) lx = 0;
+    if (Math.abs(ly) < GAMEPAD_DEADZONE) ly = 0;
+    if (lx !== 0 || ly !== 0) {
+      const fwd = -ly, strafe = lx;
+      const rightX = -player.dirY, rightY = player.dirX;
+      gpMove.mx = player.dirX * fwd + rightX * strafe;
+      gpMove.my = player.dirY * fwd + rightY * strafe;
+    }
 
     // Stick derecho: mirar/girar la cámara
     const lookX = gp.axes[2] || 0;
@@ -827,11 +853,12 @@
     if (keys["ArrowRight"]) { player.angle += ROT_SPEED * dt; updateDirVectors(); }
 
     let mx = 0, my = 0;
-    if (keys["KeyW"] || keys["ArrowUp"] || pad.up) { mx += player.dirX; my += player.dirY; }
-    if (keys["KeyS"] || keys["ArrowDown"] || pad.down) { mx -= player.dirX; my -= player.dirY; }
+    if (keys["KeyW"] || keys["ArrowUp"]) { mx += player.dirX; my += player.dirY; }
+    if (keys["KeyS"] || keys["ArrowDown"]) { mx -= player.dirX; my -= player.dirY; }
     const rightX = -player.dirY, rightY = player.dirX;
-    if (keys["KeyD"] || pad.right) { mx += rightX; my += rightY; }
-    if (keys["KeyA"] || pad.left) { mx -= rightX; my -= rightY; }
+    if (keys["KeyD"]) { mx += rightX; my += rightY; }
+    if (keys["KeyA"]) { mx -= rightX; my -= rightY; }
+    mx += gpMove.mx; my += gpMove.my;
     const touchM = applyTouchMovement();
     mx += touchM.mx; my += touchM.my;
     const mlen = Math.hypot(mx, my);

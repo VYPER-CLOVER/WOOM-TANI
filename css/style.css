@@ -39,6 +39,14 @@
   user-select: none;
 }
 
+/* En pantallas chicas (celulares/tablets) el margen fijo de 4cm deja muy
+   poco espacio real, así que ahí usamos un margen mínimo proporcional. */
+@media (max-width: 900px), (pointer: coarse) {
+  #dw-root {
+    width: min(98vw, calc(98vh * 1.6));
+  }
+}
+
 #dw-root * { box-sizing: border-box; }
 
 #dw-canvas {
@@ -364,4 +372,38 @@
 
 @media (max-width: 520px) {
   .dw-control-opt { width: 44%; padding: 14px 10px; }
+}
+
+/* ---------- Aviso para girar el celular (solo vertical en pantallas chicas) ---------- */
+#dw-rotate-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #0a0705;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  text-align: center;
+  padding: 10%;
+  font-family: 'Oswald', sans-serif;
+  color: var(--dw-bone, #cbb994);
+}
+#dw-rotate-icon {
+  font-size: 54px;
+  animation: dw-rotate-spin 1.6s ease-in-out infinite;
+}
+#dw-rotate-overlay p {
+  font-size: clamp(14px, 4.5vw, 20px);
+  max-width: 320px;
+  line-height: 1.5;
+  margin: 0;
+}
+@keyframes dw-rotate-spin {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(90deg); }
+}
+@media (orientation: portrait) and (max-width: 900px) {
+  #dw-rotate-overlay { display: flex; }
 }
