@@ -19,10 +19,11 @@
   const PICKUP_RADIUS = 0.55;
   const INTERACT_RADIUS = 1.4;
   const WEAPON_RANGE = 14;
+  const DOOR_ANIM_TIME = 0.5;       // segundos que tarda una puerta en deslizarse hacia arriba
   const LB_KEY = "dwLeaderboard_e1m1_v1";
 
   /* ---------------- Mapa: recorrido casi lineal con giros + cuarto secreto ---------------- */
-  const MAP_W = 36, MAP_H = 32;
+  const MAP_W = 36, MAP_H = 80;
   let map = [];
   function resetMap() {
     map = [];
@@ -32,8 +33,14 @@
     tile = tile === undefined ? 0 : tile;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) map[y][x] = tile;
   }
-  const SECRET_DOOR = { x: 18, y: 12 };
-  function buildLevel() {
+  const SECRET_DOORS = [
+    { x: 18, y: 12 },  // puerta secreta 1: cuarto con el secret_item
+    { x: 25, y: 75 },  // puerta secreta 2: pared paralela a la del botón final, cuarto del ítem fabri
+  ];
+  const DOORS = [
+    { x: 31, y: 25 }, // puerta normal: un solo tile en el pasillo a la derecha de la sala de la escopeta (giro hacia el sur)
+  ];
+    function buildLevel() {
     resetMap();
     carve(3, 3, 9, 9);      // sala inicial
     carve(9, 5, 16, 7);     // corredor 1 (recto, hacia el este)
@@ -41,14 +48,34 @@
     carve(19, 9, 21, 17);   // corredor 2 (giro hacia el sur)
     carve(15, 17, 24, 24);  // sala C (enemigo + vida + armadura)
     carve(24, 19, 30, 21);  // corredor 3 (giro hacia el este)
-    carve(28, 17, 34, 24);  // sala final (escopeta + interruptor de fin de nivel)
+    carve(28, 17, 34, 24);  // sala D (ya no es la final, ahora es una sala intermedia con la escopeta)
     carve(14, 11, 17, 14);  // sala secreta
-    map[SECRET_DOOR.y][SECRET_DOOR.x] = 5; // puerta secreta, cerrada (tipo 5 = textura secret_wall)
-        map[20][35] = 6; // pared del interruptor (tipo 6 = textura button_wall), un solo panel
+
+    // --- Extensión: 3 salas nuevas con enemigos escalantes + salas de paso con ítems ---
+    carve(30, 24, 32, 28);  // corredor D -> conector 1
+    carve(24, 27, 34, 32);  // conector 1 (sala de paso: ítems + enemigo)
+    carve(16, 30, 26, 33);  // corredor conector 1 -> sala E1
+    carve(10, 33, 22, 40);  // sala E1 (1 imp + 2 zombis)
+    carve(14, 40, 24, 43);  // corredor E1 -> conector 2
+    carve(20, 42, 30, 47);  // conector 2 (sala de paso: ítems + enemigos)
+    carve(26, 46, 34, 49);  // corredor conector 2 -> sala E2
+    carve(28, 49, 34, 56);  // sala E2 (2 imps)
+    carve(20, 54, 29, 57);  // corredor E2 -> conector 3
+    carve(14, 56, 24, 61);  // conector 3 (sala de paso: ítems + enemigos)
+    carve(18, 60, 28, 63);  // corredor conector 3 -> sala E3
+    carve(20, 63, 32, 70);  // sala E3 (2 imps + 3 zombis)
+    carve(28, 69, 34, 72);  // corredor E3 -> sala final
+    carve(26, 72, 34, 78);  // sala final (nueva)
+    carve(20, 73, 24, 77);  // sala secreta 2 (ítem fabri), detrás de la pared paralela al botón final
+    map[75][35] = 6;        // pared del interruptor de fin de nivel (reubicado acá)
+
+    SECRET_DOORS.forEach((d) => { map[d.y][d.x] = 5; d.opened = false; d.triggered = false; d.animT = 0; }); // puertas secretas, cerradas (tipo 5 = textura secret_wall)
+    map[25][30] = 1; map[25][32] = 1; // angostamos el pasillo a un solo tile en la fila de la puerta
+    DOORS.forEach((d) => { map[d.y][d.x] = 7; d.opened = false; d.triggered = false; d.animT = 0; });        // puertas normales, cerradas (tipo 7 = textura door)
   }
 
   // Interruptor de fin de nivel: montado contra la pared este de la sala final
-  const FINISH_SWITCH = { x: 34.3, y: 20.5 };
+  const FINISH_SWITCH = { x: 34.3, y: 75.5 };
   function nearFinishSwitch(x, y) {
     return Math.hypot(x - FINISH_SWITCH.x, y - FINISH_SWITCH.y) < INTERACT_RADIUS;
   }
@@ -91,14 +118,16 @@
     armor: "assets/objetos/armor.png",
     health: "assets/objetos/health.png",
     secret_item: "assets/objetos/secret_item.png",
+    fabri: "assets/objetos/fabri.png",
     // Texturas de paredes/piso/techo (se procesan aparte para sampleo por píxel)
     wall: "assets/escenario/wall.jpeg",
     secret_wall: "assets/escenario/secret_wall.jpeg",
     button_wall: "assets/escenario/button_wall.jpg",
+    door: "assets/escenario/door.jpeg",
     floor: "assets/escenario/floor.jpeg",
     techo: "assets/escenario/techo.jpeg",
   };
-  const TEXTURE_KEYS = ["wall", "secret_wall", "button_wall", "floor", "techo"];
+  const TEXTURE_KEYS = ["wall", "secret_wall", "button_wall", "door", "floor", "techo"];
   const assets = {};
   const textures = {};
   function loadAssets(done) {
@@ -167,18 +196,49 @@
   /* ---------------- Entidades ---------------- */
   let enemies = [];
   let items = [];
-  function buildEntities() {
+    function buildEntities() {
     enemies = [
       mkEnemy(18.5, 4.5, "zombie"),  // sala B
       mkEnemy(22.5, 6.5, "zombie"),  // sala B
       mkEnemy(20.5, 20.5, "imp"),    // sala C
+      // --- extensión ---
+      mkEnemy(29.5, 29.5, "zombie"), // conector 1
+      mkEnemy(16.5, 36.5, "imp"),    // sala E1
+      mkEnemy(13.5, 35.5, "zombie"), // sala E1
+      mkEnemy(19.5, 38.5, "zombie"), // sala E1
+      mkEnemy(23.5, 44.5, "zombie"), // conector 2
+      mkEnemy(27.5, 45.5, "imp"),    // conector 2
+      mkEnemy(30.5, 51.5, "imp"),    // sala E2
+      mkEnemy(32.5, 54.5, "imp"),    // sala E2
+      mkEnemy(17.5, 58.5, "zombie"), // conector 3
+      mkEnemy(21.5, 59.5, "zombie"), // conector 3
+      mkEnemy(22.5, 65.5, "imp"),    // sala E3
+      mkEnemy(30.5, 66.5, "imp"),    // sala E3
+      mkEnemy(24.5, 68.5, "zombie"), // sala E3
+      mkEnemy(28.5, 64.5, "zombie"), // sala E3
+      mkEnemy(26.5, 69.5, "zombie"), // sala E3
     ];
     items = [
       mkItem(20.5, 7.5, "ammo", 15),        // sala B
       mkItem(17.5, 22.5, "health", 30),     // sala C
       mkItem(22.5, 21.5, "armor", 50),      // sala C
-      mkItem(31.5, 20.5, "shotgun", 15),    // sala final, justo antes de terminar
+      mkItem(31.5, 20.5, "shotgun", 15),    // sala D
       mkItem(15.5, 12.5, "secret", 0),      // dentro del cuarto secreto
+      mkItem(22.5, 75.5, "fabri", 0),       // dentro del cuarto secreto 2 (fabri, 5000 puntos)
+      // --- extensión ---
+      mkItem(26.5, 29.5, "ammo", 15),       // conector 1
+      mkItem(32.5, 29.5, "health", 25),     // conector 1
+      mkItem(12.5, 39.5, "ammo", 15),       // sala E1
+      mkItem(20.5, 35.5, "armor", 30),      // sala E1
+      mkItem(22.5, 45.5, "ammo", 15),       // conector 2
+      mkItem(28.5, 44.5, "health", 25),     // conector 2
+      mkItem(29.5, 53.5, "health", 30),     // sala E2
+      mkItem(33.5, 51.5, "ammo", 20),       // sala E2
+      mkItem(16.5, 60.5, "armor", 30),      // conector 3
+      mkItem(22.5, 57.5, "ammo", 15),       // conector 3
+      mkItem(21.5, 69.5, "health", 30),     // sala E3
+      mkItem(31.5, 64.5, "armor", 40),      // sala E3
+      mkItem(29.5, 74.5, "health", 30),     // sala final, de regalo
     ];
   }
   function mkEnemy(x, y, kind) {
@@ -219,7 +279,6 @@
   let isMoving = false;
   let zBuffer = new Array(W).fill(1e9);
   let nearFinish = false;
-  let secretDoorOpen = false;
 
   /* ---------------- DOM ---------------- */
   let root, canvas, ctx, elHealth, elArmor, elAmmo, elScoreLive, elFaceImg, elWeaponIcon, elInteractHint;
@@ -233,13 +292,33 @@
         <div id="dw-hit-flash"></div>
         <div id="dw-interact-hint" class="dw-hidden">Presioná <b>E</b> para terminar el nivel</div>
 
-        <div id="dw-hud">
-          <div class="dw-stat"><img src="${ASSET_PATHS.ammo}" alt=""><span class="dw-num" id="dw-ammo">0</span></div>
-          <div class="dw-stat"><img id="dw-weapon-icon" src="${ASSET_PATHS.pistol}" alt=""></div>
-          <div id="dw-face"><img src="${ASSET_PATHS.peron1}" alt=""></div>
-          <div id="dw-score-live">PUNTAJE <span id="dw-score">0</span></div>
-          <div class="dw-stat"><img src="${ASSET_PATHS.armor}" alt=""><span class="dw-num" id="dw-armor">0</span></div>
-          <div class="dw-stat"><img src="${ASSET_PATHS.health}" alt=""><span class="dw-num dw-good" id="dw-health">100</span></div>
+                  <div id="dw-hud">
+          <div class="dw-hud-side dw-hud-left">
+            <div class="dw-hud-group">
+              <img class="dw-hud-icon" src="${ASSET_PATHS.ammo}" alt="">
+              <span class="dw-hud-num" id="dw-ammo">0</span>
+            </div>
+            <div class="dw-hud-group">
+              <img class="dw-hud-icon" src="${ASSET_PATHS.armor}" alt="">
+              <span class="dw-hud-num" id="dw-armor">0</span>
+            </div>
+          </div>
+
+          <img class="dw-hud-face" id="dw-face-img" src="${ASSET_PATHS.peron1}" alt="">
+
+          <div class="dw-hud-side dw-hud-right">
+            <div class="dw-hud-group dw-hud-score-group">
+              <span class="dw-hud-score-label">PUNTAJE</span>
+              <span class="dw-hud-num" id="dw-score">0</span>
+            </div>
+            <div class="dw-hud-group">
+              <img class="dw-hud-icon dw-hud-weapon-icon" id="dw-weapon-icon" src="${ASSET_PATHS.pistol}" alt="">
+            </div>
+            <div class="dw-hud-group">
+              <img class="dw-hud-icon" src="${ASSET_PATHS.health}" alt="">
+              <span class="dw-hud-num" id="dw-health">100</span>
+            </div>
+          </div>
         </div>
 
         <div class="dw-overlay" id="dw-overlay-menu">
@@ -276,7 +355,7 @@
     elAmmo = container.querySelector("#dw-ammo");
     elScoreLive = container.querySelector("#dw-score");
     elWeaponIcon = container.querySelector("#dw-weapon-icon");
-    elFaceImg = container.querySelector("#dw-face img");
+    elFaceImg = container.querySelector("#dw-face-img");
     elInteractHint = container.querySelector("#dw-interact-hint");
     overlayMenu = container.querySelector("#dw-overlay-menu");
     overlayEnd = container.querySelector("#dw-overlay-end");
@@ -324,14 +403,41 @@
 
   function tryInteract() {
     if (nearFinish) { state = "won"; showEndScreen(true); return; }
-    if (!secretDoorOpen) {
-      const dx = player.x - (SECRET_DOOR.x + 0.5), dy = player.y - (SECRET_DOOR.y + 0.5);
+    for (const d of SECRET_DOORS) {
+      if (d.triggered) continue;
+      const dx = player.x - (d.x + 0.5), dy = player.y - (d.y + 0.5);
       if (Math.hypot(dx, dy) < INTERACT_RADIUS) {
-        secretDoorOpen = true;
-        map[SECRET_DOOR.y][SECRET_DOOR.x] = 0;
+        d.triggered = true;
+        d.animT = 0;
         playSound("door");
         faceOverrideImgKey = "peron_deidad";
         faceOverrideTimer = 2.2;
+        return;
+      }
+    }
+    for (const d of DOORS) {
+      if (d.triggered) continue;
+      const dx = player.x - (d.x + 0.5), dy = player.y - (d.y + 0.5);
+      if (Math.hypot(dx, dy) < INTERACT_RADIUS) {
+        d.triggered = true;
+        d.animT = 0;
+        playSound("door");
+        return;
+      }
+    }
+  }
+
+  function updateDoors(dt) {
+    for (const d of SECRET_DOORS) {
+      if (d.triggered && !d.opened) {
+        d.animT += dt;
+        if (d.animT >= DOOR_ANIM_TIME) { d.animT = DOOR_ANIM_TIME; d.opened = true; map[d.y][d.x] = 0; }
+      }
+    }
+    for (const d of DOORS) {
+      if (d.triggered && !d.opened) {
+        d.animT += dt;
+        if (d.animT >= DOOR_ANIM_TIME) { d.animT = DOOR_ANIM_TIME; d.opened = true; map[d.y][d.x] = 0; }
       }
     }
   }
@@ -346,7 +452,6 @@
     player.hasShotgun = false; player.weapon = "pistol";
     score = 0; kills = 0; totalRoundsFired = 0;
     nearFinish = false;
-    secretDoorOpen = false;
     faceOverrideTimer = 0;
     weaponGrabTimer = 0;
     elInteractHint.classList.add("dw-hidden");
@@ -411,6 +516,7 @@
     door: "assets/sonidos/doorEffect.mp3",
     soundtrack: "assets/sonidos/soundtrack.mp3",
     desesperado: "assets/sonidos/desesperado.mp3",
+    cobra: "assets/sonidos/cobra.mp3",
   };
   const SOUND_VOLUME = { pistol: 0.4, shotgun: 0.5, item: 1, door: 0.8 };
   function playSound(key) {
@@ -453,6 +559,19 @@
       desesperadoAudio.currentTime = 0;
     }
   }
+  let cobraAudio = null;
+function switchToCobra() {
+  try {
+    if (musicAudio && !musicAudio.paused) musicAudio.pause();
+    if (desesperadoAudio && !desesperadoAudio.paused) desesperadoAudio.pause();
+    if (!cobraAudio) {
+      cobraAudio = new Audio(SOUND_PATHS.cobra);
+      cobraAudio.loop = true;
+      cobraAudio.volume = 0.3;
+    }
+    if (cobraAudio.paused) cobraAudio.play().catch(() => {});
+  } catch (e) { /* audio no disponible, seguimos sin romper el juego */ }
+}
 
   function tryShoot() {
     if (state !== "playing" || player.ammo <= 0) return;
@@ -504,6 +623,7 @@
 
     updateEnemies(dt);
     updateItems();
+    updateDoors(dt);
     checkNearFinish();
   }
 
@@ -549,6 +669,7 @@
         else if (it.type === "armor") { player.armor = Math.min(200, player.armor + it.amount); score += 25; }
         else if (it.type === "ammo") { player.ammo += it.amount; score += 25; }
         else if (it.type === "secret") { score += 25; switchToDesesperado(); }
+        else if (it.type === "fabri") { score += 5000; switchToCobra(); }
         else if (it.type === "shotgun") {
           player.hasShotgun = true; player.weapon = "shotgun"; player.ammo += it.amount; score += 200;
           weaponGrabTimer = 0.5;
@@ -736,7 +857,19 @@
 
       const tex = (wallType === 5 && textures.secret_wall) ? textures.secret_wall
         : (wallType === 6 && textures.button_wall) ? textures.button_wall
+        : (wallType === 7 && textures.door) ? textures.door
         : textures.wall;
+
+      // Si la celda es una puerta (secreta o normal) que se está abriendo, calculamos
+      // cuánto se deslizó hacia arriba para desplazar el sampleo de la textura.
+      let doorProgress = 0;
+      if (wallType === 5) {
+        const dObj = SECRET_DOORS.find((dd) => dd.x === mapX && dd.y === mapY);
+        if (dObj && dObj.triggered && !dObj.opened) doorProgress = Math.min(1, dObj.animT / DOOR_ANIM_TIME);
+      } else if (wallType === 7) {
+        const dObj = DOORS.find((dd) => dd.x === mapX && dd.y === mapY);
+        if (dObj && dObj.triggered && !dObj.opened) doorProgress = Math.min(1, dObj.animT / DOOR_ANIM_TIME);
+      }
       if (!tex) {
         const shade = Math.max(0.25, 1 - perpDist / 16);
         const c = 100 * shade;
@@ -750,14 +883,20 @@
       let wallX = side === 0 ? player.y + perpDist * rayDirY : player.x + perpDist * rayDirX;
       wallX -= Math.floor(wallX);
       let texX = Math.floor(wallX * tex.width);
-      if (side === 0 && rayDirX > 0) texX = tex.width - texX - 1;
-      if (side === 1 && rayDirY < 0) texX = tex.width - texX - 1;
+      // Corrección de orientación (con el signo correcto para la convención de cámara de
+      // este motor: dirX=cos(a), dirY=sin(a), planeX=-dirY, planeY=dirX). Sin esto, la mitad
+      // de las paredes de un mismo tipo (según desde qué lado/dirección se las mire) quedan
+      // espejadas; con el signo correcto, el texto se ve igual y correcto se lo mire desde
+      // donde se lo mire, incluidas las puertas y la pared secreta que se recorren en ambos sentidos.
+      if (side === 0 && rayDirX < 0) texX = tex.width - texX - 1;
+      if (side === 1 && rayDirY > 0) texX = tex.width - texX - 1;
       texX = ((texX % tex.width) + tex.width) % tex.width;
 
       const shade = Math.max(0.3, 1 - perpDist / 16) * (side === 1 ? 0.7 : 1);
       for (let y = clipStart; y <= clipEnd; y++) {
         const d = y * 256 - H * 128 + lineHeight * 128;
         let texY = Math.floor((d * tex.height) / lineHeight / 256);
+        if (doorProgress > 0) texY += Math.floor(doorProgress * tex.height);
         texY = ((texY % tex.height) + tex.height) % tex.height;
         const tIdx = (texY * tex.width + texX) * 4;
         const idx = (y * W + x) * 4;
@@ -821,21 +960,23 @@
     return "pistol";
   }
 
-  function renderWeapon() {
-    const bobX = isMoving ? Math.sin(walkCycle) * 10 : 0;
-    const bobY = isMoving ? Math.abs(Math.sin(walkCycle)) * 12 : 0;
-    const recoil = muzzleFlashTimer > 0 ? 16 : 0;
-    const img = assets[currentWeaponAssetKey()];
-    const w = W * 0.4, h = w * 0.64;
-    const x = W / 2 - w / 2 + bobX;
-    const y = H - h * 0.6 + bobY - recoil;
-    drawImageSafe(img, x, y, w, h, "#3a3a3a");
-  }
+  const HUD_HEIGHT_RATIO = 0.15; // debe coincidir con la altura del #dw-hud en el CSS
+function renderWeapon() {
+  const bobX = isMoving ? Math.sin(walkCycle) * 10 : 0;
+  const bobY = isMoving ? Math.abs(Math.sin(walkCycle)) * 12 : 0;
+  const recoil = muzzleFlashTimer > 0 ? 16 : 0;
+  const img = assets[currentWeaponAssetKey()];
+  const w = W * 0.4, h = w * 0.64;
+  const x = W / 2 - w / 2 + bobX;
+  const hudTop = H * (1 - HUD_HEIGHT_RATIO);
+  const y = hudTop - h * 0.6 + bobY - recoil;
+  drawImageSafe(img, x, y, w, h, "#3a3a3a");
+}
 
   /* ---------------- HUD ---------------- */
   function updateHUD() {
     elHealth.textContent = Math.max(0, Math.round(player.health));
-    elHealth.className = "dw-num" + (player.health > 100 ? " dw-good" : "");
+    elHealth.classList.toggle("dw-good", player.health > 100);
     elArmor.textContent = Math.round(player.armor);
     elAmmo.textContent = player.ammo;
     elScoreLive.textContent = score;

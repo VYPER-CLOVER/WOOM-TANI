@@ -1,5 +1,22 @@
 @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Share+Tech+Mono&display=swap');
 
+@font-face {
+  font-family: 'AmazDooMLeft';
+  src: url('../assets/Fonts/AmazDooMLeft.ttf') format('truetype');
+  font-display: swap;
+}
+@font-face {
+  font-family: 'DoomedRegular';
+  src: url('../assets/Fonts/doomed-regular.ttf') format('truetype');
+  font-display: swap;
+}
+
+#dw-root, #dw-root * {
+  font-family: 'DoomedRegular', 'Share Tech Mono', monospace;
+}
+#dw-root .dw-title {
+  font-family: 'AmazDooMLeft', 'Oswald', sans-serif;
+}
 #dw-root {
   --dw-bg: #0c0a08;
   --dw-panel: #17110c;
@@ -12,8 +29,7 @@
   font-family: 'Oswald', sans-serif;
   color: var(--dw-bone);
   position: relative;
-  width: 100%;
-  max-width: 960px;
+  width: min(calc(100vw - 4cm), calc((100vh - 4cm) * 1.6));
   aspect-ratio: 16 / 10;
   margin: 0 auto;
   background: #000;
@@ -35,38 +51,60 @@
   image-rendering: pixelated;
 }
 
-/* ---------- HUD ---------- */
+/* ---------- HUD (basado en assets/jugador/hud.jpeg) ---------- */
 #dw-hud {
   position: absolute;
   left: 0; right: 0; bottom: 0;
   height: 15%;
   min-height: 74px;
-  background: linear-gradient(180deg, #000000cc, #050403 40%, #050403);
-  border-top: 2px solid var(--dw-rust-dim);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 3%;
+  background: url('../assets/jugador/hud.jpeg') center / 100% 100% no-repeat;
   z-index: 5;
   font-family: 'Share Tech Mono', monospace;
+  display: flex;
+  align-items: center;
+  padding: 0 3%;
+  box-sizing: border-box;
 }
 
-.dw-stat { display: flex; align-items: center; gap: 10px; min-width: 70px; }
-.dw-stat img { width: 34px; height: 34px; filter: drop-shadow(0 0 2px #000); }
-.dw-stat .dw-num { font-size: clamp(18px, 3vw, 30px); color: var(--dw-rust); font-weight: 700; letter-spacing: 1px; }
-.dw-stat .dw-num.dw-good { color: var(--dw-good); }
+/* Los dos lados crecen parejo, así la cara queda centrada sola sin coordenadas fijas */
+.dw-hud-side { flex: 1 1 0; display: flex; align-items: center; gap: 6%; }
+.dw-hud-left { justify-content: flex-start; }
+.dw-hud-right { justify-content: flex-end; }
 
-#dw-face { width: 56px; height: 56px; border: 2px solid var(--dw-rust-dim); border-radius: 4px; overflow: hidden; }
-#dw-face img { width: 100%; height: 100%; object-fit: cover; }
+.dw-hud-group { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 
-#dw-score-live {
-  font-family: 'Oswald', sans-serif;
-  font-weight: 600;
-  font-size: clamp(14px, 2.2vw, 22px);
-  color: var(--dw-bone);
+.dw-hud-icon {
+  width: clamp(28px, 4vw, 42px);
+  height: clamp(28px, 4vw, 42px);
+  object-fit: contain;
+  filter: drop-shadow(0 0 2px #000);
+}
+.dw-hud-weapon-icon { width: clamp(34px, 5vw, 52px); height: clamp(34px, 5vw, 52px); }
+
+.dw-hud-num {
+  font-weight: 700;
   letter-spacing: 1px;
+  color: var(--dw-rust);
+  font-size: clamp(13px, 2.1vw, 22px);
+  line-height: 1;
 }
-#dw-score-live span { color: var(--dw-rust); }
+.dw-hud-num.dw-good { color: var(--dw-good); }
+
+.dw-hud-score-label {
+  font-size: clamp(7px, 1vw, 10px);
+  letter-spacing: 1px;
+  color: var(--dw-bone);
+}
+
+/* Cara del jugador: se centra sola por flexbox, solo hace falta que coincida
+   en ancho/alto con el recuadro rojo del fondo */
+.dw-hud-face {
+  flex: 0 0 auto;
+  width: 8%;
+  height: 84%;
+  object-fit: cover;
+  border-radius: 2px;
+}
 
 /* ---------- Crosshair & flash ---------- */
 #dw-crosshair {
@@ -178,9 +216,7 @@
 }
 
 @media (max-width: 520px) {
-  .dw-stat img { width: 24px; height: 24px; }
-  .dw-stat .dw-num { font-size: 14px; }
-  #dw-face { width: 40px; height: 40px; }
+  .dw-hud-num { font-size: 10px; }
 }
 
 #dw-interact-hint {
